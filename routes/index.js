@@ -1,9 +1,23 @@
 var express = require('express');
+const MongoClient = require('mongodb').MongoClient;
 var router = express.Router();
 var passport = require('passport');
 var LocalStrategy = require('passport-local').Strategy;
+var bcrypt = require('bcryptjs');
 
-var User = require('../models/user');
+const url = 'mongodb://localhost:27017';
+const dbName = 'caramelNetworkDb';
+const client = new MongoClient(url);
+var db;
+
+client.connect(function (err) {
+  if (err == null) {
+    console.log("Connected successfully to server");
+    db = client.db(dbName);
+  } else {
+    console.log(err.message);
+  }
+});
 
 /* GET home page. */
 router.get('/', ensureAuthenticated, function (req, res, next) {
@@ -33,13 +47,25 @@ router.post('/changePassword', ensureAuthenticated, function (req, res, next) {
     req.flash('error_msg', 'Passwords do not match');
     res.redirect('/changePassword');
   } else {
-    User.updateUserPassword(req.body.NewPassword, function (err, result) {
-      if (result) {
-        req.flash('success_msg', 'Password is changed');
-        res.redirect('/login');
-      } else if (!err) {
-        req.flash('error_msg', 'Could not change password');
-        res.redirect('/changePassword');
+
+    bcrypt.hash(req.body.NewPassword, 10, function (err, hash) {
+      if (!err) {
+
+        db.collection('users').updateOne({
+          "username": "admin"
+        }, {
+          $set: {
+            "password": hash
+          }
+        }, function (err, r) {
+          if (!err) {
+            req.flash('success_msg', 'Password is changed');
+            res.redirect('/login');
+          } else {
+            req.flash('error_msg', 'Could not change password');
+            res.redirect('/changePassword');
+          }
+        });
       } else {
         req.flash('error', err.message);
         res.redirect('/changePassword');
@@ -64,41 +90,46 @@ router.get('/login', function (req, res, next) {
   });
 });
 
-/* router.post('/logout', function (req, res, next) {
-  res.sendStatus(401);
-}); */
-
 passport.use(new LocalStrategy(
   function (username, password, done) {
-    User.getUserByUsername(username, function (err, user) {
-      if (err) throw err;
-      if (!user) {
-        return done(null, false, {
-          message: 'Incorrect username or password'
-        });
-      }
 
-      User.comparePassword(password, user.password, function (err, isMatch) {
-        if (err) throw err;
-        if (isMatch) {
-          return done(null, user);
+    db.collection('users').findOne({
+      username: username
+    }, function (err, r) {
+      if (!err) {
+        if (r) {
+          bcrypt.compare(password, r.password, function (err, isMatch) {
+            if (err) throw err;
+            if (isMatch) {
+              return done(null, r);
+            } else {
+              return done(null, false, {
+                message: 'Invalid password'
+              });
+            }
+          });
         } else {
           return done(null, false, {
-            message: 'Invalid password'
+            message: 'Incorrect username or password'
           });
         }
-      });
+      } else {
+        throw err;
+      }
     });
-  }
-));
+  }));
 
 passport.serializeUser(function (user, done) {
-  done(null, user.id);
+  done(null, user.username);
 });
 
-passport.deserializeUser(function (id, done) {
-  User.getUserById(id, function (err, user) {
-    done(err, user);
+passport.deserializeUser(function (username, done) {
+  db.collection('users').findOne({
+    username: username
+  }, function (err, r) {
+    if (!err) {
+      done(err, r);
+    }
   });
 });
 
